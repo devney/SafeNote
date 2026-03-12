@@ -1,18 +1,29 @@
+import json
 import sys
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker
-from PySide6.QtGui import QAction, QFont, QFontDatabase, QKeySequence, QTextCharFormat
+from PySide6.QtGui import QAction, QFont, QKeySequence, QTextCharFormat, QTextOption
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QMainWindow,
     QMessageBox,
     QTextEdit,
+    QLabel,
 )
 
 
 APP_NAME = "SafeNote"
+
+
+class PlainPasteTextEdit(QTextEdit):
+    """Text edit that always pastes plain text only (no colors, fonts, or other formatting)."""
+
+    def insertFromMimeData(self, source) -> None:
+        if source.hasText():
+            self.insertPlainText(source.text())
+        # Ignore HTML and other formatted content so pasted text is always unformatted
 
 
 class MainWindow(QMainWindow):
@@ -21,17 +32,28 @@ class MainWindow(QMainWindow):
 
         self._current_path: Path | None = None
         self._current_is_markdown: bool = True
+        self._recent_files: list[Path] = []
 
-        self.editor = QTextEdit()
+        self.editor = PlainPasteTextEdit()
         self.editor.setAcceptRichText(True)
         self.setCentralWidget(self.editor)
 
         self._create_actions()
         self._create_menus()
 
+        self._load_recent_files()
+        self._rebuild_recent_menu()
+
+        self._status_label = QLabel()
+        self.statusBar().addPermanentWidget(self._status_label)
+
+        self._base_font = self.editor.font()
+
         self.editor.document().modificationChanged.connect(self._update_window_title)
         self.editor.currentCharFormatChanged.connect(self._sync_format_actions)
+        self.editor.cursorPositionChanged.connect(self._update_status_bar)
         self._update_window_title()
+        self._update_status_bar()
 
         self.resize(900, 650)
 
@@ -41,16 +63,6 @@ class MainWindow(QMainWindow):
             cursor.select(cursor.SelectionType.WordUnderCursor)
         cursor.mergeCharFormat(fmt)
         self.editor.mergeCurrentCharFormat(fmt)
-
-    def _set_font_family(self, family: str) -> None:
-        fmt = QTextCharFormat()
-        fmt.setFontFamily(family)
-        self._merge_format_on_selection(fmt)
-
-    def _set_font_size(self, size: int) -> None:
-        fmt = QTextCharFormat()
-        fmt.setFontPointSize(float(size))
-        self._merge_format_on_selection(fmt)
 
     def _toggle_bold(self, checked: bool) -> None:
         fmt = QTextCharFormat()
@@ -71,6 +83,36 @@ class MainWindow(QMainWindow):
         fmt = QTextCharFormat()
         fmt.setFontStrikeOut(checked)
         self._merge_format_on_selection(fmt)
+
+    # Markdown helpers
+    def _wrap_selection(self, prefix: str, suffix: str) -> None:
+        cursor = self.editor.textCursor()
+        text = cursor.selectedText()
+        if not text:
+            cursor.insertText(prefix + suffix)
+            cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor, len(suffix))
+            self.editor.setTextCursor(cursor)
+            return
+        cursor.insertText(prefix + text + suffix)
+
+    def _insert_block_prefix(self, prefix: str) -> None:
+        cursor = self.editor.textCursor()
+        cursor.beginEditBlock()
+        if not cursor.hasSelection():
+            cursor.movePosition(cursor.MoveOperation.StartOfLine)
+            cursor.insertText(prefix)
+        else:
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+            cursor.setPosition(start)
+            while cursor.position() <= end:
+                cursor.movePosition(cursor.MoveOperation.StartOfLine)
+                cursor.insertText(prefix)
+                if not cursor.movePosition(cursor.MoveOperation.Down):
+                    break
+                if cursor.position() > end:
+                    break
+        cursor.endEditBlock()
 
     def _sync_format_actions(self, fmt: QTextCharFormat) -> None:
         with QSignalBlocker(self.action_bold):
@@ -130,6 +172,71 @@ class MainWindow(QMainWindow):
         self.action_strikethrough.setCheckable(True)
         self.action_strikethrough.toggled.connect(self._toggle_strikethrough)
 
+        # Insert / Markdown actions
+        self.action_heading1 = QAction("Heading &1", self)
+        self.action_heading1.triggered.connect(lambda: self._insert_block_prefix("# "))
+
+        self.action_heading2 = QAction("Heading &2", self)
+        self.action_heading2.triggered.connect(lambda: self._insert_block_prefix("## "))
+
+        self.action_heading3 = QAction("Heading &3", self)
+        self.action_heading3.triggered.connect(lambda: self._insert_block_prefix("### "))
+
+        self.action_bullet_list = QAction("&Bulleted list", self)
+        self.action_bullet_list.triggered.connect(lambda: self._insert_block_prefix("- "))
+
+        self.action_numbered_list = QAction("&Numbered list", self)
+        self.action_numbered_list.triggered.connect(lambda: self._insert_block_prefix("1. "))
+
+        self.action_inline_code = QAction("Inline &code", self)
+        self.action_inline_code.triggered.connect(lambda: self._wrap_selection("`", "`"))
+
+        self.action_code_block = QAction("&Code block", self)
+        self.action_code_block.triggered.connect(self._insert_code_block)
+
+        self.action_blockquote = QAction("&Block quote", self)
+        self.action_blockquote.triggered.connect(lambda: self._insert_block_prefix("> "))
+
+        self.action_horizontal_rule = QAction("Horizontal &rule", self)
+        self.action_horizontal_rule.triggered.connect(self._insert_horizontal_rule)
+
+        self.action_link = QAction("&Link", self)
+        self.action_link.triggered.connect(self._insert_link)
+
+        self.action_image = QAction("&Image", self)
+        self.action_image.triggered.connect(self._insert_image)
+
+        # View actions
+        self.action_view_markdown = QAction("View &Markdown", self)
+        self.action_view_markdown.triggered.connect(self._view_markdown)
+
+        self.action_toggle_word_wrap = QAction("Word &Wrap", self)
+        self.action_toggle_word_wrap.setCheckable(True)
+        self.action_toggle_word_wrap.setChecked(True)
+        self.action_toggle_word_wrap.triggered.connect(self._toggle_word_wrap)
+
+        self.action_toggle_whitespace = QAction("Show &Whitespace", self)
+        self.action_toggle_whitespace.setCheckable(True)
+        self.action_toggle_whitespace.setChecked(False)
+        self.action_toggle_whitespace.triggered.connect(self._toggle_whitespace)
+
+        self.action_zoom_in = QAction("Zoom &In", self)
+        self.action_zoom_in.setShortcut(QKeySequence.ZoomIn)
+        self.action_zoom_in.triggered.connect(lambda: self.editor.zoomIn(1))
+
+        self.action_zoom_out = QAction("Zoom &Out", self)
+        self.action_zoom_out.setShortcut(QKeySequence.ZoomOut)
+        self.action_zoom_out.triggered.connect(lambda: self.editor.zoomOut(1))
+
+        self.action_zoom_reset = QAction("Reset &Zoom", self)
+        self.action_zoom_reset.setShortcut(QKeySequence("Ctrl+0"))
+        self.action_zoom_reset.triggered.connect(self._reset_zoom)
+
+        self.action_toggle_status_bar = QAction("&Status Bar", self)
+        self.action_toggle_status_bar.setCheckable(True)
+        self.action_toggle_status_bar.setChecked(True)
+        self.action_toggle_status_bar.triggered.connect(self._toggle_status_bar)
+
         self.action_new = QAction("&New", self)
         self.action_new.setShortcut(QKeySequence.New)
         self.action_new.triggered.connect(self.new_file)
@@ -154,6 +261,9 @@ class MainWindow(QMainWindow):
         self.action_exit.setShortcut(QKeySequence.Quit)
         self.action_exit.triggered.connect(self.close)
 
+        # Recent-file actions (menu is built dynamically)
+        self._recent_menu = None
+
         self.editor.document().undoAvailable.connect(self.action_undo.setEnabled)
         self.editor.document().redoAvailable.connect(self.action_redo.setEnabled)
         self.editor.copyAvailable.connect(self.action_cut.setEnabled)
@@ -163,6 +273,7 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction(self.action_new)
         file_menu.addAction(self.action_open)
+        self._recent_menu = file_menu.addMenu("Open &Recent")
         file_menu.addSeparator()
         file_menu.addAction(self.action_save)
         file_menu.addAction(self.action_save_as)
@@ -187,22 +298,34 @@ class MainWindow(QMainWindow):
         format_menu.addAction(self.action_underline)
         format_menu.addAction(self.action_strikethrough)
 
-        font_menu = format_menu.addMenu("&Font")
-        font_db = QFontDatabase()
-        for family in font_db.families():
-            action = QAction(family, self)
-            action.triggered.connect(
-                lambda checked=False, fam=family: self._set_font_family(fam)
-            )
-            font_menu.addAction(action)
+        view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction(self.action_view_markdown)
+        view_menu.addSeparator()
+        view_menu.addAction(self.action_toggle_word_wrap)
+        view_menu.addAction(self.action_toggle_whitespace)
+        view_menu.addSeparator()
+        view_menu.addAction(self.action_zoom_in)
+        view_menu.addAction(self.action_zoom_out)
+        view_menu.addAction(self.action_zoom_reset)
+        view_menu.addSeparator()
+        view_menu.addAction(self.action_toggle_status_bar)
 
-        size_menu = format_menu.addMenu("Font &Size")
-        for size in (8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32):
-            action = QAction(f"{size} pt", self)
-            action.triggered.connect(
-                lambda checked=False, s=size: self._set_font_size(s)
-            )
-            size_menu.addAction(action)
+        insert_menu = self.menuBar().addMenu("&Insert")
+        insert_menu.addAction(self.action_heading1)
+        insert_menu.addAction(self.action_heading2)
+        insert_menu.addAction(self.action_heading3)
+        insert_menu.addSeparator()
+        insert_menu.addAction(self.action_bullet_list)
+        insert_menu.addAction(self.action_numbered_list)
+        insert_menu.addSeparator()
+        insert_menu.addAction(self.action_inline_code)
+        insert_menu.addAction(self.action_code_block)
+        insert_menu.addSeparator()
+        insert_menu.addAction(self.action_link)
+        insert_menu.addAction(self.action_image)
+        insert_menu.addSeparator()
+        insert_menu.addAction(self.action_blockquote)
+        insert_menu.addAction(self.action_horizontal_rule)
 
     def _update_window_title(self) -> None:
         name = self._current_path.name if self._current_path else (
@@ -210,6 +333,97 @@ class MainWindow(QMainWindow):
         )
         modified = "*" if self.editor.document().isModified() else ""
         self.setWindowTitle(f"{name}{modified} — {APP_NAME}")
+
+    def _update_status_bar(self) -> None:
+        cursor = self.editor.textCursor()
+        line = cursor.blockNumber() + 1
+        col = cursor.columnNumber() + 1
+        mode = "Markdown" if self._current_is_markdown else "Text"
+        self._status_label.setText(f"Ln {line}, Col {col}   [{mode}]")
+
+    # Recent files
+    @staticmethod
+    def _recent_storage_path() -> Path:
+        return Path.home() / ".safenote_recent.json"
+
+    def _load_recent_files(self) -> None:
+        path = self._recent_storage_path()
+        if not path.exists():
+            self._recent_files = []
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self._recent_files = [Path(p) for p in data if Path(p).exists()]
+        except Exception:
+            self._recent_files = []
+
+    def _save_recent_files(self) -> None:
+        path = self._recent_storage_path()
+        try:
+            path.write_text(
+                json.dumps([str(p) for p in self._recent_files[:5]]),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _add_recent_file(self, path: Path) -> None:
+        try:
+            path = path.resolve()
+        except Exception:
+            return
+        self._recent_files = [p for p in self._recent_files if p != path]
+        self._recent_files.insert(0, path)
+        self._recent_files = self._recent_files[:5]
+        self._save_recent_files()
+        self._rebuild_recent_menu()
+
+    def _rebuild_recent_menu(self) -> None:
+        if self._recent_menu is None:
+            return
+        self._recent_menu.clear()
+        if not self._recent_files:
+            empty_action = QAction("(No recent files)", self)
+            empty_action.setEnabled(False)
+            self._recent_menu.addAction(empty_action)
+            return
+        for path in self._recent_files:
+            action = QAction(str(path), self)
+            action.triggered.connect(
+                lambda checked=False, p=path: self._open_recent_file(p)
+            )
+            self._recent_menu.addAction(action)
+
+    def _open_recent_file(self, path: Path) -> None:
+        if not path.exists():
+            QMessageBox.warning(
+                self,
+                APP_NAME,
+                f"File not found:\n{path}\n\nIt will be removed from the recent list.",
+            )
+            self._recent_files = [p for p in self._recent_files if p != path]
+            self._save_recent_files()
+            self._rebuild_recent_menu()
+            return
+        if not self._maybe_save():
+            return
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            QMessageBox.critical(self, APP_NAME, f"Could not open file:\n{e}")
+            return
+        is_markdown = path.suffix.lower() == ".md"
+        self._current_path = path
+        self._current_is_markdown = is_markdown
+        if is_markdown:
+            self.editor.setMarkdown(text)
+        else:
+            self.editor.setPlainText(text)
+        self.editor.document().setModified(False)
+        self._update_window_title()
+        self._update_status_bar()
 
     def _maybe_save(self) -> bool:
         if not self.editor.document().isModified():
@@ -240,6 +454,7 @@ class MainWindow(QMainWindow):
         self.editor.clear()
         self.editor.document().setModified(False)
         self._update_window_title()
+        self._update_status_bar()
 
     def close_file(self) -> None:
         if not self._maybe_save():
@@ -250,6 +465,7 @@ class MainWindow(QMainWindow):
         self.editor.clear()
         self.editor.document().setModified(False)
         self._update_window_title()
+        self._update_status_bar()
 
     def open_file(self) -> None:
         if not self._maybe_save():
@@ -284,6 +500,8 @@ class MainWindow(QMainWindow):
 
         self.editor.document().setModified(False)
         self._update_window_title()
+        self._update_status_bar()
+        self._add_recent_file(path)
 
     def _choose_save_path(self) -> tuple[Path | None, bool]:
         suggested_name = (
@@ -321,6 +539,54 @@ class MainWindow(QMainWindow):
             return self.editor.document().toMarkdown()
         return self.editor.toPlainText()
 
+    # Insert handlers
+    def _insert_code_block(self) -> None:
+        cursor = self.editor.textCursor()
+        cursor.beginEditBlock()
+        cursor.insertText("\n```text\n")
+        cursor.insertText("\n```\n")
+        cursor.movePosition(cursor.MoveOperation.Up)
+        self.editor.setTextCursor(cursor)
+        cursor.endEditBlock()
+
+    def _insert_horizontal_rule(self) -> None:
+        cursor = self.editor.textCursor()
+        cursor.insertText("\n---\n")
+
+    def _insert_link(self) -> None:
+        cursor = self.editor.textCursor()
+        text = cursor.selectedText() or "link text"
+        cursor.insertText(f"[{text}](url)")
+
+    def _insert_image(self) -> None:
+        cursor = self.editor.textCursor()
+        cursor.insertText("![alt text](path/to/image.png)")
+
+    # View handlers
+    def _view_markdown(self) -> None:
+        text = self.editor.document().toMarkdown()
+        QMessageBox.information(self, "Markdown", text if text else "(document is empty)")
+
+    def _toggle_word_wrap(self, checked: bool) -> None:
+        mode = QTextEdit.LineWrapMode.WidgetWidth if checked else QTextEdit.LineWrapMode.NoWrap
+        self.editor.setLineWrapMode(mode)
+
+    def _toggle_whitespace(self, checked: bool) -> None:
+        opt = self.editor.document().defaultTextOption()
+        flags = opt.flags()
+        if checked:
+            flags |= QTextOption.Flag.ShowTabsAndSpaces
+        else:
+            flags &= ~QTextOption.Flag.ShowTabsAndSpaces
+        opt.setFlags(flags)
+        self.editor.document().setDefaultTextOption(opt)
+
+    def _reset_zoom(self) -> None:
+        self.editor.setFont(self._base_font)
+
+    def _toggle_status_bar(self, checked: bool) -> None:
+        self.statusBar().setVisible(checked)
+
     def save_file(self) -> bool:
         if self._current_path is None:
             return self.save_file_as()
@@ -347,7 +613,10 @@ class MainWindow(QMainWindow):
 
         self._current_path = path
         self._current_is_markdown = is_markdown
-        return self.save_file()
+        ok = self.save_file()
+        if ok and self._current_path is not None:
+            self._add_recent_file(self._current_path)
+        return ok
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._maybe_save():
