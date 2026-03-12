@@ -15,6 +15,6 @@ Simple cross-platform notepad built with Python and PySide6.
 ```bash
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe .\main.py
+.\.venv\Scripts\python.exe -m src.main
 ```
 
