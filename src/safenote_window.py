@@ -1,7 +1,7 @@
 import json
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from PySide6.QtCore import QSignalBlocker
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QPixmap, QTextCharFormat, QTextOption
@@ -39,7 +39,7 @@ class MainWindow(QMainWindow):
 
         self._current_path: Path | None = None
         self._current_is_markdown: bool = True
-        self._view_mode: str = "wysiwyg"
+        self._view_mode: Literal["wysiwyg", "markdown_mode"] = "wysiwyg"
         self._recent_files: list[Path] = []
 
         self.editor = PlainPasteTextEdit()
@@ -445,6 +445,7 @@ class MainWindow(QMainWindow):
         self._load_path_into_self(path)
 
     def _is_pristine_untitled(self) -> bool:
+        """Return True if this window shows an empty, unsaved Untitled document."""
         if self._current_path is not None:
             return False
         if self.editor.document().isModified():
@@ -452,6 +453,7 @@ class MainWindow(QMainWindow):
         return self.editor.toPlainText().strip() == ""
 
     def _is_only_main_window(self) -> bool:
+        """Return True if there is one or fewer MainWindow instances alive."""
         app = QApplication.instance()
         if app is None:
             return True
@@ -460,11 +462,15 @@ class MainWindow(QMainWindow):
         )
 
     def _should_spawn_for_open(self) -> bool:
-        # Special case: if the only open window is an empty, unmodified Untitled document,
-        # re-use it instead of spawning a new window.
+        """Return True when opening should create a new window instead of reusing this one.
+
+        Special case: if the only open window is an empty, unmodified "Untitled" document,
+        re-use it instead of spawning a new window.
+        """
         return not (self._is_only_main_window() and self._is_pristine_untitled())
 
     def _load_path_into_self(self, path: Path) -> None:
+        """Load the given path into this window, updating markdown/plain-text state."""
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:

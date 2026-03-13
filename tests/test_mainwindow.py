@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from PySide6.QtCore import QMimeData
+
 
 def test_default_is_markdown(main_window):
     assert main_window._current_is_markdown is True  # type: ignore[attr-defined]
@@ -100,4 +102,138 @@ def test_should_spawn_for_open_is_false_for_pristine_single_window(main_window):
     main_window._is_only_main_window = lambda: True  # type: ignore[attr-defined]
 
     assert main_window._should_spawn_for_open() is False  # type: ignore[attr-defined]
+
+
+def test_plain_paste_text_edit_strips_formatting(main_window):
+    # PlainPasteTextEdit is used for the main editor
+    mime = QMimeData()
+    mime.setHtml("<b>Secret</b>")
+    mime.setText("Secret")
+
+    main_window.editor.clear()
+    main_window.editor.insertFromMimeData(mime)
+
+    # We expect only plain text to be inserted, with no bold tags preserved
+    assert main_window.editor.toPlainText() == "Secret"
+    assert "<b>" not in main_window.editor.toHtml()
+
+
+def test_open_file_spawns_new_window_when_should_spawn(main_window, tmp_path: Path, monkeypatch):
+    # Prepare a markdown file to open
+    path = tmp_path / "example.md"
+    path.write_text("# Title\nBody", encoding="utf-8")
+
+    # Stub out file dialog to return our path
+    monkeypatch.setattr(
+        "src.safenote_window.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: (str(path), "Markdown files (*.md)"),
+    )
+
+    # Avoid touching the real recent-file storage
+    main_window._save_recent_files = lambda: None  # type: ignore[attr-defined]
+    main_window._rebuild_recent_menu = lambda: None  # type: ignore[attr-defined]
+
+    opened: list[Path | None] = []
+    main_window._spawn_window = lambda p: opened.append(p)  # type: ignore[attr-defined]
+    main_window._should_spawn_for_open = lambda: True  # type: ignore[attr-defined]
+
+    main_window.open_file()
+
+    assert opened == [path]
+    # Current window should remain unchanged (still Untitled)
+    assert main_window._current_path is None  # type: ignore[attr-defined]
+
+
+def test_open_file_reuses_pristine_window_when_not_spawning(main_window, tmp_path: Path, monkeypatch):
+    path = tmp_path / "example.md"
+    path.write_text("Hello", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "src.safenote_window.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: (str(path), "Markdown files (*.md)"),
+    )
+
+    main_window._save_recent_files = lambda: None  # type: ignore[attr-defined]
+    main_window._rebuild_recent_menu = lambda: None  # type: ignore[attr-defined]
+    main_window._should_spawn_for_open = lambda: False  # type: ignore[attr-defined]
+
+    main_window.open_file()
+
+    assert main_window._current_path == path  # type: ignore[attr-defined]
+    assert "Hello" in main_window.editor.toPlainText()
+
+
+def test_open_recent_spawns_new_window_when_should_spawn(main_window, tmp_path: Path):
+    path = tmp_path / "recent.md"
+    path.write_text("Recent", encoding="utf-8")
+
+    main_window._save_recent_files = lambda: None  # type: ignore[attr-defined]
+    main_window._rebuild_recent_menu = lambda: None  # type: ignore[attr-defined]
+
+    spawned: list[Path | None] = []
+    main_window._spawn_window = lambda p: spawned.append(p)  # type: ignore[attr-defined]
+    main_window._should_spawn_for_open = lambda: True  # type: ignore[attr-defined]
+
+    main_window._open_recent_file(path)  # type: ignore[attr-defined]
+
+    assert spawned == [path]
+    assert main_window._current_path is None  # type: ignore[attr-defined]
+
+
+def test_open_recent_reuses_window_when_not_spawning(main_window, tmp_path: Path):
+    path = tmp_path / "recent.md"
+    path.write_text("Recent", encoding="utf-8")
+
+    main_window._save_recent_files = lambda: None  # type: ignore[attr-defined]
+    main_window._rebuild_recent_menu = lambda: None  # type: ignore[attr-defined]
+    main_window._should_spawn_for_open = lambda: False  # type: ignore[attr-defined]
+
+    main_window._open_recent_file(path)  # type: ignore[attr-defined]
+
+    assert main_window._current_path == path  # type: ignore[attr-defined]
+    assert "Recent" in main_window.editor.toPlainText()
+
+
+class _DummyEvent:
+    def __init__(self) -> None:
+        self.accepted = False
+        self.ignored = False
+
+    def accept(self) -> None:
+        self.accepted = True
+
+    def ignore(self) -> None:
+        self.ignored = True
+
+
+def test_close_event_accepts_without_changes(main_window):
+    main_window.editor.document().setModified(False)
+    event = _DummyEvent()
+
+    main_window.closeEvent(event)  # type: ignore[arg-type]
+
+    assert event.accepted is True
+    assert event.ignored is False
+
+
+def test_close_event_ignored_when_maybe_save_returns_false(main_window):
+    main_window._maybe_save = lambda: False  # type: ignore[attr-defined]
+    event = _DummyEvent()
+
+    main_window.closeEvent(event)  # type: ignore[arg-type]
+
+    assert event.accepted is False
+    assert event.ignored is True
+
+
+def test_status_bar_shows_view_mode(main_window):
+    main_window._view_mode = "wysiwyg"  # type: ignore[attr-defined]
+    main_window._update_status_bar()  # type: ignore[attr-defined]
+    text = main_window._status_label.text()  # type: ignore[attr-defined]
+    assert "[WYSIWYG]" in text
+
+    main_window._view_mode = "markdown_mode"  # type: ignore[attr-defined]
+    main_window._update_status_bar()  # type: ignore[attr-defined]
+    text = main_window._status_label.text()  # type: ignore[attr-defined]
+    assert "[Markdown]" in text
 
