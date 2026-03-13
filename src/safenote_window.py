@@ -368,8 +368,8 @@ class MainWindow(QMainWindow):
         cursor = self.editor.textCursor()
         line = cursor.blockNumber() + 1
         col = cursor.columnNumber() + 1
-        mode = "Markdown" if self._current_is_markdown else "Text"
-        self._status_label.setText(f"Ln {line}, Col {col}   [{mode}]")
+        view = "WYSIWYG" if self._view_mode == "wysiwyg" else "Markdown"
+        self._status_label.setText(f"Ln {line}, Col {col}   [{view}]")
 
     # Recent files
     @staticmethod
