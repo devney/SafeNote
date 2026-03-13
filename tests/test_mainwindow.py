@@ -8,18 +8,19 @@ def test_default_is_markdown(main_window):
 
 
 def test_new_file_resets_state(main_window, tmp_path: Path):
-    # Avoid interactive dialog in _maybe_save()
-    main_window._maybe_save = lambda: True  # type: ignore[attr-defined]
-
     main_window._current_path = tmp_path / "example.md"  # type: ignore[attr-defined]
     main_window.editor.setPlainText("Hello")
     main_window.editor.document().setModified(True)
 
+    spawned: list[Path | None] = []
+    main_window._spawn_window = lambda p: spawned.append(p)  # type: ignore[attr-defined]
+
     main_window.new_file()
 
-    assert main_window._current_path is None  # type: ignore[attr-defined]
-    assert main_window.editor.toPlainText() == ""
-    assert main_window.editor.document().isModified() is False
+    # New opens a new window and leaves the current document unchanged
+    assert spawned == [None]
+    assert main_window._current_path == tmp_path / "example.md"  # type: ignore[attr-defined]
+    assert main_window.editor.toPlainText() == "Hello"
 
 
 def test_serialize_plain_text(main_window):
@@ -76,4 +77,27 @@ def test_recent_files_capped_and_unique(main_window, tmp_path: Path):
     assert len(recent) == 5
     # Most recent should be last one added
     assert recent[0] == paths[-1]
+
+
+def test_close_file_closes_window(main_window):
+    main_window._maybe_save = lambda: True  # type: ignore[attr-defined]
+
+    closed = {"called": False}
+    main_window.close = lambda: closed.__setitem__("called", True)  # type: ignore[method-assign]
+
+    main_window.close_file()
+
+    assert closed["called"] is True
+
+
+def test_should_spawn_for_open_is_false_for_pristine_single_window(main_window):
+    # Pristine "Untitled" doc
+    main_window._current_path = None  # type: ignore[attr-defined]
+    main_window.editor.setPlainText("")
+    main_window.editor.document().setModified(False)
+
+    # Force "only window" regardless of test runner widgets
+    main_window._is_only_main_window = lambda: True  # type: ignore[attr-defined]
+
+    assert main_window._should_spawn_for_open() is False  # type: ignore[attr-defined]
 
