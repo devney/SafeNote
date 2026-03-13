@@ -16,11 +16,15 @@ if (-not (Test-Path $python)) {
 & $python -m pip install -r requirements.txt | Out-Null
 & $python -m pip install pyinstaller | Out-Null
 
+# Build .ico for the EXE (spiral notebook with S)
+& $python ".\tools\make_icon.py"
+
 & $python -m PyInstaller `
   --noconsole `
   --name $Name `
   --clean `
   --onefile `
+  --icon ".\assets\SafeNote.ico" `
   ".\safenote.py"
 
 Write-Host ""

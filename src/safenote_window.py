@@ -1,6 +1,7 @@
 import json
 import sys
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import QSignalBlocker
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QPixmap, QTextCharFormat, QTextOption
@@ -29,10 +30,12 @@ class PlainPasteTextEdit(QTextEdit):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, spawn_window: Callable[[Path | None], None] | None = None) -> None:
         super().__init__()
 
         self.setWindowIcon(QIcon(QPixmap(ICON_XPM)))
+        self._spawn_window = spawn_window
+        self._force_close: bool = False
 
         self._current_path: Path | None = None
         self._current_is_markdown: bool = True
@@ -432,8 +435,36 @@ class MainWindow(QMainWindow):
             self._save_recent_files()
             self._rebuild_recent_menu()
             return
-        if not self._maybe_save():
+        # Opening a file should not replace the current window's document.
+        # Each opened file gets its own window.
+        self._add_recent_file(path)
+        if self._spawn_window is not None and self._should_spawn_for_open():
+            self._spawn_window(path)
             return
+        # Fallback: open in the current window
+        self._load_path_into_self(path)
+
+    def _is_pristine_untitled(self) -> bool:
+        if self._current_path is not None:
+            return False
+        if self.editor.document().isModified():
+            return False
+        return self.editor.toPlainText().strip() == ""
+
+    def _is_only_main_window(self) -> bool:
+        app = QApplication.instance()
+        if app is None:
+            return True
+        return (
+            len([w for w in app.topLevelWidgets() if isinstance(w, MainWindow)]) <= 1
+        )
+
+    def _should_spawn_for_open(self) -> bool:
+        # Special case: if the only open window is an empty, unmodified Untitled document,
+        # re-use it instead of spawning a new window.
+        return not (self._is_only_main_window() and self._is_pristine_untitled())
+
+    def _load_path_into_self(self, path: Path) -> None:
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -441,8 +472,14 @@ class MainWindow(QMainWindow):
         except OSError as e:
             QMessageBox.critical(self, APP_NAME, f"Could not open file:\n{e}")
             return
-        is_markdown = path.suffix.lower() == ".md"
-        self._current_path = path
+
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path
+
+        is_markdown = resolved.suffix.lower() == ".md"
+        self._current_path = resolved
         self._current_is_markdown = is_markdown
         if self._view_mode == "wysiwyg" and is_markdown:
             self.editor.setMarkdown(text)
@@ -474,7 +511,10 @@ class MainWindow(QMainWindow):
         return self.save_file()
 
     def new_file(self) -> None:
-        if not self._maybe_save():
+        # New file should not replace the current window's document.
+        # Each new file gets its own window.
+        if self._spawn_window is not None:
+            self._spawn_window(None)
             return
 
         self._current_path = None
@@ -487,18 +527,12 @@ class MainWindow(QMainWindow):
     def close_file(self) -> None:
         if not self._maybe_save():
             return
-
-        self._current_path = None
-        self._current_is_markdown = True
-        self.editor.clear()
-        self.editor.document().setModified(False)
-        self._update_window_title()
-        self._update_status_bar()
+        # In multi-window mode, "Close File" closes the whole window.
+        # Avoid a second prompt via closeEvent by forcing accept.
+        self._force_close = True
+        self.close()
 
     def open_file(self) -> None:
-        if not self._maybe_save():
-            return
-
         filename, _selected_filter = QFileDialog.getOpenFileName(
             self,
             "Open file",
@@ -509,28 +543,12 @@ class MainWindow(QMainWindow):
             return
 
         path = Path(filename)
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            QMessageBox.critical(self, APP_NAME, f"Could not open file:\n{e}")
-            return
-
-        is_markdown = path.suffix.lower() == ".md"
-        self._current_path = path
-        self._current_is_markdown = is_markdown
-
-        if self._view_mode == "wysiwyg" and is_markdown:
-            self.editor.setMarkdown(text)
-            self.editor.setHtml(self.editor.document().toHtml())
-        else:
-            self.editor.setPlainText(text)
-
-        self.editor.document().setModified(False)
-        self._update_window_title()
-        self._update_status_bar()
         self._add_recent_file(path)
+        if self._spawn_window is not None and self._should_spawn_for_open():
+            self._spawn_window(path)
+            return
+        # Fallback: open in the current window
+        self._load_path_into_self(path)
 
     def _choose_save_path(self) -> tuple[Path | None, bool]:
         suggested_name = (
@@ -678,6 +696,10 @@ class MainWindow(QMainWindow):
         return ok
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if self._force_close:
+            self._force_close = False
+            event.accept()
+            return
         if self._maybe_save():
             event.accept()
         else:
@@ -689,8 +711,30 @@ def main() -> int:
     app.setApplicationName(APP_NAME)
     app.setQuitOnLastWindowClosed(True)
 
-    window = MainWindow()
-    window.show()
+    windows: list[MainWindow] = []
+    offset_step = 40
+
+    def spawn(path: Path | None) -> None:
+        window = MainWindow(spawn_window=spawn)
+        # Stagger each new window slightly so they don't completely obscure
+        # the previous one.
+        if windows:
+            prev = windows[-1]
+            pos = prev.pos()
+            window.move(pos.x() + offset_step, pos.y() + offset_step)
+
+        windows.append(window)
+        window.destroyed.connect(
+            lambda _=None, w=window: windows.remove(w) if w in windows else None
+        )
+
+        if path is not None:
+            window._load_path_into_self(path)
+            window._add_recent_file(path)
+
+        window.show()
+
+    spawn(None)
 
     return app.exec()
 

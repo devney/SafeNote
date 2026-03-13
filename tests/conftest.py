@@ -23,7 +23,7 @@ def main_window(app: QApplication):
 
     from src.safenote_window import MainWindow  # type: ignore
 
-    window = MainWindow()
+    window = MainWindow(spawn_window=lambda _path: None)
     yield window
     window.close()
 

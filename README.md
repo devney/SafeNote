@@ -47,7 +47,8 @@ This creates a standard Windows executable at `dist\SafeNote.exe` (no console wi
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m pip install pyinstaller
-.\.venv\Scripts\python.exe -m PyInstaller --noconsole --name SafeNote --clean --onefile .\safenote.py
+.\.venv\Scripts\python.exe .\tools\make_icon.py
+.\.venv\Scripts\python.exe -m PyInstaller --noconsole --name SafeNote --clean --onefile --icon .\assets\SafeNote.ico .\safenote.py
 ```
 
 Or run the included build script:
