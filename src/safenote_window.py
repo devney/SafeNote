@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker
-from PySide6.QtGui import QAction, QFont, QKeySequence, QTextCharFormat, QTextOption
+from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QPixmap, QTextCharFormat, QTextOption
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QLabel,
 )
+
+from .icon_xpm import ICON_XPM
 
 
 APP_NAME = "SafeNote"
@@ -29,6 +31,8 @@ class PlainPasteTextEdit(QTextEdit):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+
+        self.setWindowIcon(QIcon(QPixmap(ICON_XPM)))
 
         self._current_path: Path | None = None
         self._current_is_markdown: bool = True

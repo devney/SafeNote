@@ -39,3 +39,20 @@ pip install -r requirements.txt
 python -m src.main
 ```
 
+## Building a Windows `.exe` (double-click to run)
+
+This creates a standard Windows executable at `dist\SafeNote.exe` (no console window).
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install pyinstaller
+.\.venv\Scripts\python.exe -m PyInstaller --noconsole --name SafeNote --clean --onefile .\safenote.py
+```
+
+Or run the included build script:
+
+```powershell
+.\build.ps1
+```
+
