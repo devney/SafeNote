@@ -57,3 +57,12 @@ Or run the included build script:
 .\build.ps1
 ```
 
+## Building a macOS `.app` (double-click to run)
+
+On macOS, this creates a standard app bundle at `dist/SafeNote.app`:
+
+```bash
+chmod +x build_mac.sh
+./build_mac.sh
+```
+
