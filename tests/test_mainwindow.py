@@ -8,6 +8,9 @@ def test_default_is_markdown(main_window):
 
 
 def test_new_file_resets_state(main_window, tmp_path: Path):
+    # Avoid interactive dialog in _maybe_save()
+    main_window._maybe_save = lambda: True  # type: ignore[attr-defined]
+
     main_window._current_path = tmp_path / "example.md"  # type: ignore[attr-defined]
     main_window.editor.setPlainText("Hello")
     main_window.editor.document().setModified(True)
