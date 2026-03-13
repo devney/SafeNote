@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
 
         self._current_path: Path | None = None
         self._current_is_markdown: bool = True
+        self._view_mode: str = "wysiwyg"
         self._recent_files: list[Path] = []
 
         self.editor = PlainPasteTextEdit()
@@ -48,6 +49,16 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self._status_label)
 
         self._base_font = self.editor.font()
+
+        # Ensure markdown headings render with distinct sizes in WYSIWYG
+        self.editor.document().setDefaultStyleSheet("""
+            h1 { font-size: 22pt; font-weight: bold; }
+            h2 { font-size: 18pt; font-weight: bold; }
+            h3 { font-size: 14pt; font-weight: bold; }
+            h4 { font-size: 12pt; font-weight: bold; }
+            h5 { font-size: 11pt; font-weight: bold; }
+            h6 { font-size: 10pt; font-weight: bold; }
+        """)
 
         self.editor.document().modificationChanged.connect(self._update_window_title)
         self.editor.currentCharFormatChanged.connect(self._sync_format_actions)
@@ -207,9 +218,6 @@ class MainWindow(QMainWindow):
         self.action_image.triggered.connect(self._insert_image)
 
         # View actions
-        self.action_view_markdown = QAction("View &Markdown", self)
-        self.action_view_markdown.triggered.connect(self._view_markdown)
-
         self.action_toggle_word_wrap = QAction("Word &Wrap", self)
         self.action_toggle_word_wrap.setCheckable(True)
         self.action_toggle_word_wrap.setChecked(True)
@@ -236,6 +244,20 @@ class MainWindow(QMainWindow):
         self.action_toggle_status_bar.setCheckable(True)
         self.action_toggle_status_bar.setChecked(True)
         self.action_toggle_status_bar.triggered.connect(self._toggle_status_bar)
+
+        self.action_view_wysiwyg = QAction("&WYSIWYG Mode", self)
+        self.action_view_wysiwyg.setCheckable(True)
+        self.action_view_wysiwyg.setChecked(True)
+        self.action_view_wysiwyg.triggered.connect(
+            lambda checked: checked and self._set_view_mode("wysiwyg")
+        )
+
+        self.action_view_markdown_mode = QAction("Markdown &Mode", self)
+        self.action_view_markdown_mode.setCheckable(True)
+        self.action_view_markdown_mode.setChecked(False)
+        self.action_view_markdown_mode.triggered.connect(
+            lambda checked: checked and self._set_view_mode("markdown_mode")
+        )
 
         self.action_new = QAction("&New", self)
         self.action_new.setShortcut(QKeySequence.New)
@@ -299,7 +321,8 @@ class MainWindow(QMainWindow):
         format_menu.addAction(self.action_strikethrough)
 
         view_menu = self.menuBar().addMenu("&View")
-        view_menu.addAction(self.action_view_markdown)
+        view_menu.addAction(self.action_view_wysiwyg)
+        view_menu.addAction(self.action_view_markdown_mode)
         view_menu.addSeparator()
         view_menu.addAction(self.action_toggle_word_wrap)
         view_menu.addAction(self.action_toggle_whitespace)
@@ -417,8 +440,9 @@ class MainWindow(QMainWindow):
         is_markdown = path.suffix.lower() == ".md"
         self._current_path = path
         self._current_is_markdown = is_markdown
-        if is_markdown:
+        if self._view_mode == "wysiwyg" and is_markdown:
             self.editor.setMarkdown(text)
+            self.editor.setHtml(self.editor.document().toHtml())
         else:
             self.editor.setPlainText(text)
         self.editor.document().setModified(False)
@@ -493,8 +517,9 @@ class MainWindow(QMainWindow):
         self._current_path = path
         self._current_is_markdown = is_markdown
 
-        if is_markdown:
+        if self._view_mode == "wysiwyg" and is_markdown:
             self.editor.setMarkdown(text)
+            self.editor.setHtml(self.editor.document().toHtml())
         else:
             self.editor.setPlainText(text)
 
@@ -536,7 +561,9 @@ class MainWindow(QMainWindow):
 
     def _serialize_document(self) -> str:
         if self._current_is_markdown:
-            return self.editor.document().toMarkdown()
+            if self._view_mode == "wysiwyg":
+                return self.editor.document().toMarkdown()
+            return self.editor.toPlainText()
         return self.editor.toPlainText()
 
     # Insert handlers
@@ -563,9 +590,37 @@ class MainWindow(QMainWindow):
         cursor.insertText("![alt text](path/to/image.png)")
 
     # View handlers
-    def _view_markdown(self) -> None:
-        text = self.editor.document().toMarkdown()
-        QMessageBox.information(self, "Markdown", text if text else "(document is empty)")
+    def _set_view_mode(self, mode: str) -> None:
+        if mode == self._view_mode:
+            return
+
+        # Capture current markdown/plain-text representation
+        if self._current_is_markdown and self._view_mode == "wysiwyg":
+            md = self.editor.document().toMarkdown()
+        else:
+            md = self.editor.toPlainText()
+
+        self._view_mode = mode
+
+        if mode == "markdown_mode":
+            self.editor.setAcceptRichText(False)
+            self.editor.setPlainText(md)
+            with QSignalBlocker(self.action_view_markdown_mode):
+                self.action_view_markdown_mode.setChecked(True)
+            with QSignalBlocker(self.action_view_wysiwyg):
+                self.action_view_wysiwyg.setChecked(False)
+        else:
+            self.editor.setAcceptRichText(True)
+            if self._current_is_markdown:
+                self.editor.setMarkdown(md)
+                # Re-apply content as HTML so defaultStyleSheet (h1/h2/h3 sizes) is applied
+                self.editor.setHtml(self.editor.document().toHtml())
+            else:
+                self.editor.setPlainText(md)
+            with QSignalBlocker(self.action_view_wysiwyg):
+                self.action_view_wysiwyg.setChecked(True)
+            with QSignalBlocker(self.action_view_markdown_mode):
+                self.action_view_markdown_mode.setChecked(False)
 
     def _toggle_word_wrap(self, checked: bool) -> None:
         mode = QTextEdit.LineWrapMode.WidgetWidth if checked else QTextEdit.LineWrapMode.NoWrap
