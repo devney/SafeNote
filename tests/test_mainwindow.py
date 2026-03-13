@@ -34,3 +34,43 @@ def test_serialize_markdown(main_window):
     data = main_window._serialize_document()  # type: ignore[attr-defined]
     assert "**Bold**" in data
 
+
+def test_serialize_markdown_source_mode(main_window):
+    main_window._current_is_markdown = True  # type: ignore[attr-defined]
+    main_window.editor.setMarkdown("**Bold** text")
+
+    main_window._set_view_mode("markdown_mode")  # type: ignore[attr-defined]
+
+    data = main_window._serialize_document()  # type: ignore[attr-defined]
+    # In markdown mode we expect to see the raw markers
+    assert "**Bold** text" in data
+
+
+def test_view_mode_round_trip(main_window):
+    main_window._current_is_markdown = True  # type: ignore[attr-defined]
+    main_window.editor.setMarkdown("# Title\n\nBody")
+    original = main_window._serialize_document()  # type: ignore[attr-defined]
+
+    main_window._set_view_mode("markdown_mode")  # type: ignore[attr-defined]
+    assert main_window.editor.toPlainText()  # type: ignore[attr-defined]
+
+    main_window._set_view_mode("wysiwyg")  # type: ignore[attr-defined]
+    round_tripped = main_window._serialize_document()  # type: ignore[attr-defined]
+    assert original == round_tripped
+
+
+def test_recent_files_capped_and_unique(main_window, tmp_path: Path):
+    # Avoid touching the real recent-file storage
+    main_window._save_recent_files = lambda: None  # type: ignore[attr-defined]
+    main_window._rebuild_recent_menu = lambda: None  # type: ignore[attr-defined]
+
+    paths = [tmp_path / f"file{i}.md" for i in range(7)]
+    for p in paths:
+        p.write_text("x", encoding="utf-8")
+        main_window._add_recent_file(p)  # type: ignore[attr-defined]
+
+    recent = main_window._recent_files  # type: ignore[attr-defined]
+    assert len(recent) == 5
+    # Most recent should be last one added
+    assert recent[0] == paths[-1]
+
